@@ -148,97 +148,140 @@ class HealthConnectManager(private val context: Context) {
     /**
      * เขียนข้อมูลองค์ประกอบร่างกายเต็มรูปแบบ (Xiaomi S400) ลง Health Connect
      * รองรับทั้ง Weight, Body Fat %, Muscle Mass, Bone Mass และ BMR
+     * ตรวจสอบความซ้ำแยกรายประเภท เพื่อให้ค่าที่เคยขาด (เช่น Body Fat) สามารถเติมเต็มได้
      */
     suspend fun writeBodyMetricRecords(metrics: List<BodyMetricItem>): Pair<Int, Int> {
         if (metrics.isEmpty()) return Pair(0, 0)
 
         val now = Instant.now()
         val thirtyDaysAgo = now.minus(30, ChronoUnit.DAYS)
-        val existingClientIds = mutableSetOf<String>()
+        val timeFilter = TimeRangeFilter.between(thirtyDaysAgo, now.plus(1, ChronoUnit.DAYS))
+
+        val existingWeightIds = mutableSetOf<String>()
+        val existingFatIds = mutableSetOf<String>()
+        val existingLeanIds = mutableSetOf<String>()
+        val existingBoneIds = mutableSetOf<String>()
+        val existingBmrIds = mutableSetOf<String>()
 
         try {
-            val existing = client.readRecords(
-                ReadRecordsRequest(
-                    recordType = WeightRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(thirtyDaysAgo, now.plus(1, ChronoUnit.DAYS))
-                )
-            )
-            for (rec in existing.records) {
-                val cid = rec.metadata.clientRecordId
-                if (!cid.isNullOrBlank()) {
-                    existingClientIds.add(cid)
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+            val weights = client.readRecords(ReadRecordsRequest(WeightRecord::class, timeFilter))
+            for (rec in weights.records) rec.metadata.clientRecordId?.let { existingWeightIds.add(it) }
+        } catch (e: Exception) { e.printStackTrace() }
+
+        try {
+            val fats = client.readRecords(ReadRecordsRequest(BodyFatRecord::class, timeFilter))
+            for (rec in fats.records) rec.metadata.clientRecordId?.let { existingFatIds.add(it) }
+        } catch (e: Exception) { e.printStackTrace() }
+
+        try {
+            val leans = client.readRecords(ReadRecordsRequest(LeanBodyMassRecord::class, timeFilter))
+            for (rec in leans.records) rec.metadata.clientRecordId?.let { existingLeanIds.add(it) }
+        } catch (e: Exception) { e.printStackTrace() }
+
+        try {
+            val bones = client.readRecords(ReadRecordsRequest(BoneMassRecord::class, timeFilter))
+            for (rec in bones.records) rec.metadata.clientRecordId?.let { existingBoneIds.add(it) }
+        } catch (e: Exception) { e.printStackTrace() }
+
+        try {
+            val bmrs = client.readRecords(ReadRecordsRequest(BasalMetabolicRateRecord::class, timeFilter))
+            for (rec in bmrs.records) rec.metadata.clientRecordId?.let { existingBmrIds.add(it) }
+        } catch (e: Exception) { e.printStackTrace() }
 
         val recordsToInsert = mutableListOf<androidx.health.connect.client.records.Record>()
         var skipped = 0
 
         for (item in metrics) {
-            if (item.weightKg <= 0.0) continue
-
-            val weightClientId = "WEIGHT_${item.metricId}"
-            if (existingClientIds.contains(weightClientId)) {
-                skipped++
-                continue
-            }
-
             val instant = parseMetricTimestamp(item)
+            var itemHadNewField = false
 
             // 1. WeightRecord (น้ำหนักตัว)
-            val weightRec = WeightRecord(
-                weight = Mass.kilograms(item.weightKg),
-                time = instant,
-                zoneOffset = ZoneOffset.ofHours(7),
-                metadata = Metadata(clientRecordId = weightClientId)
-            )
-            recordsToInsert.add(weightRec)
-            existingClientIds.add(weightClientId)
+            if (item.weightKg > 0.0) {
+                val weightClientId = "WEIGHT_${item.metricId}"
+                if (!existingWeightIds.contains(weightClientId)) {
+                    recordsToInsert.add(
+                        WeightRecord(
+                            weight = Mass.kilograms(item.weightKg),
+                            time = instant,
+                            zoneOffset = ZoneOffset.ofHours(7),
+                            metadata = Metadata(clientRecordId = weightClientId)
+                        )
+                    )
+                    existingWeightIds.add(weightClientId)
+                    itemHadNewField = true
+                }
+            }
 
             // 2. BodyFatRecord (เปอร์เซ็นต์ไขมันในร่างกาย)
             if (item.bodyFatPct > 0.0 && item.bodyFatPct <= 100.0) {
-                val fatRec = BodyFatRecord(
-                    percentage = Percentage(item.bodyFatPct),
-                    time = instant,
-                    zoneOffset = ZoneOffset.ofHours(7),
-                    metadata = Metadata(clientRecordId = "BODYFAT_${item.metricId}")
-                )
-                recordsToInsert.add(fatRec)
+                val fatClientId = "BODYFAT_${item.metricId}"
+                if (!existingFatIds.contains(fatClientId)) {
+                    recordsToInsert.add(
+                        BodyFatRecord(
+                            percentage = Percentage(item.bodyFatPct),
+                            time = instant,
+                            zoneOffset = ZoneOffset.ofHours(7),
+                            metadata = Metadata(clientRecordId = fatClientId)
+                        )
+                    )
+                    existingFatIds.add(fatClientId)
+                    itemHadNewField = true
+                }
             }
 
             // 3. LeanBodyMassRecord (มวลกล้ามเนื้อโครงร่าง)
             if (item.muscleKg > 0.0) {
-                val leanRec = LeanBodyMassRecord(
-                    mass = Mass.kilograms(item.muscleKg),
-                    time = instant,
-                    zoneOffset = ZoneOffset.ofHours(7),
-                    metadata = Metadata(clientRecordId = "LEANMASS_${item.metricId}")
-                )
-                recordsToInsert.add(leanRec)
+                val leanClientId = "LEANMASS_${item.metricId}"
+                if (!existingLeanIds.contains(leanClientId)) {
+                    recordsToInsert.add(
+                        LeanBodyMassRecord(
+                            mass = Mass.kilograms(item.muscleKg),
+                            time = instant,
+                            zoneOffset = ZoneOffset.ofHours(7),
+                            metadata = Metadata(clientRecordId = leanClientId)
+                        )
+                    )
+                    existingLeanIds.add(leanClientId)
+                    itemHadNewField = true
+                }
             }
 
             // 4. BoneMassRecord (มวลกระดูก)
             if (item.boneMassKg > 0.0) {
-                val boneRec = BoneMassRecord(
-                    mass = Mass.kilograms(item.boneMassKg),
-                    time = instant,
-                    zoneOffset = ZoneOffset.ofHours(7),
-                    metadata = Metadata(clientRecordId = "BONEMASS_${item.metricId}")
-                )
-                recordsToInsert.add(boneRec)
+                val boneClientId = "BONEMASS_${item.metricId}"
+                if (!existingBoneIds.contains(boneClientId)) {
+                    recordsToInsert.add(
+                        BoneMassRecord(
+                            mass = Mass.kilograms(item.boneMassKg),
+                            time = instant,
+                            zoneOffset = ZoneOffset.ofHours(7),
+                            metadata = Metadata(clientRecordId = boneClientId)
+                        )
+                    )
+                    existingBoneIds.add(boneClientId)
+                    itemHadNewField = true
+                }
             }
 
             // 5. BasalMetabolicRateRecord (อัตราเผาผลาญพลังงานพื้นฐาน BMR)
             if (item.bmrKcal > 0.0) {
-                val bmrRec = BasalMetabolicRateRecord(
-                    basalMetabolicRate = Power.kilocaloriesPerDay(item.bmrKcal),
-                    time = instant,
-                    zoneOffset = ZoneOffset.ofHours(7),
-                    metadata = Metadata(clientRecordId = "BMR_${item.metricId}")
-                )
-                recordsToInsert.add(bmrRec)
+                val bmrClientId = "BMR_${item.metricId}"
+                if (!existingBmrIds.contains(bmrClientId)) {
+                    recordsToInsert.add(
+                        BasalMetabolicRateRecord(
+                            basalMetabolicRate = Power.kilocaloriesPerDay(item.bmrKcal),
+                            time = instant,
+                            zoneOffset = ZoneOffset.ofHours(7),
+                            metadata = Metadata(clientRecordId = bmrClientId)
+                        )
+                    )
+                    existingBmrIds.add(bmrClientId)
+                    itemHadNewField = true
+                }
+            }
+
+            if (!itemHadNewField) {
+                skipped++
             }
         }
 
