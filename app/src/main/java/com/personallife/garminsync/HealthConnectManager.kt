@@ -7,6 +7,7 @@ import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.MealType
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.AggregateRequest
@@ -162,11 +163,11 @@ class HealthConnectManager(private val context: Context) {
 
     private fun mapMealType(thaiMealType: String?): Int {
         return when (thaiMealType?.trim()) {
-            "เช้า" -> NutritionRecord.MEAL_TYPE_BREAKFAST
-            "กลางวัน" -> NutritionRecord.MEAL_TYPE_LUNCH
-            "เย็น" -> NutritionRecord.MEAL_TYPE_DINNER
-            "ของว่าง / เครื่องดื่ม", "ของว่าง", "ของหวาน" -> NutritionRecord.MEAL_TYPE_SNACK
-            else -> NutritionRecord.MEAL_TYPE_UNKNOWN
+            "เช้า" -> MealType.MEAL_TYPE_BREAKFAST
+            "กลางวัน" -> MealType.MEAL_TYPE_LUNCH
+            "เย็น" -> MealType.MEAL_TYPE_DINNER
+            "ของว่าง / เครื่องดื่ม", "ของว่าง", "ของหวาน" -> MealType.MEAL_TYPE_SNACK
+            else -> MealType.MEAL_TYPE_UNKNOWN
         }
     }
 
