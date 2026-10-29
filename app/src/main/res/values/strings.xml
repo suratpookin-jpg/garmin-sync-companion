@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Health Sync Companion</string>
+    <string name="title_dashboard">Health Connect 2-Way Sync</string>
+    <string name="subtitle">Garmin Connect ➔ Sheets ➔ Samsung Health (Food &amp; Workouts)</string>
+    <string name="status_ready">พร้อมทำงาน (Ready)</string>
+    <string name="btn_check_permissions">ขอสิทธิ์ Health Connect (กิจกรรม + อาหาร)</string>
+    <string name="btn_sync_now">⚡ ซิงก์ 2-Way ทันที (Sync Now)</string>
+    <string name="btn_save_config">บันทึกการตั้งค่า</string>
+    <string name="hint_gas_url">วาง URL ของ GAS Ingest Bridge Web App</string>
+    <string name="hint_bridge_secret">รหัสลับ X-Bridge-Token (เช่น secret_1234)</string>
+    <string name="auto_sync_label">ซิงก์อัตโนมัติ 2-Way ในพื้นหลัง (ทุก 30 นาที)</string>
+</resources>

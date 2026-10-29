@@ -1,0 +1,75 @@
+package com.personallife.garminsync
+
+import android.content.Context
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import java.time.Instant
+import java.time.temporal.ChronoUnit
+
+class SyncWorker(
+    appContext: Context,
+    workerParams: WorkerParameters
+) : CoroutineWorker(appContext, workerParams) {
+
+    override suspend fun doWork(): Result {
+        val prefs = applicationContext.getSharedPreferences("garmin_sync_prefs", Context.MODE_PRIVATE)
+        val endpointUrl = prefs.getString("gas_url", "") ?: ""
+        val secretToken = prefs.getString("bridge_secret", "") ?: ""
+
+        if (endpointUrl.isBlank()) {
+            return Result.success() // ยังไม่ได้ตั้งค่า URL ไม่ต้อง retry
+        }
+
+        val hcManager = HealthConnectManager(applicationContext)
+        if (!hcManager.hasAllPermissions()) {
+            return Result.success()
+        }
+
+        val network = NetworkManager()
+        var anySuccess = false
+
+        // 1. ขาออก (Upload): ดึงกิจกรรม Garmin 24 ชั่วโมงล่าสุด ส่งเข้า GAS
+        var recentFoodsFromUpload: List<FoodItem>? = null
+        try {
+            val since = Instant.now().minus(24, ChronoUnit.HOURS)
+            val workouts = hcManager.readRecentGarminWorkouts(since)
+
+            if (workouts.isNotEmpty()) {
+                val payload = WorkoutSyncPayload(activities = workouts)
+                val result = network.syncWorkouts(endpointUrl, secretToken, payload)
+                if (result.isSuccess) {
+                    anySuccess = true
+                    recentFoodsFromUpload = result.getOrNull()?.recentFoods
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. ขาเข้า (Download): ดึงประวัติอาหารจาก GAS เขียนลง Health Connect -> Samsung Health
+        try {
+            val foodsToSync = if (!recentFoodsFromUpload.isNullOrEmpty()) {
+                recentFoodsFromUpload
+            } else {
+                val foodResult = network.fetchRecentFoods(endpointUrl, secretToken, days = 3)
+                if (foodResult.isSuccess) foodResult.getOrNull() else null
+            }
+
+            if (!foodsToSync.isNullOrEmpty()) {
+                val (inserted, skipped) = hcManager.writeNutritionRecords(foodsToSync)
+                if (inserted > 0 || skipped > 0) {
+                    anySuccess = true
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        return if (anySuccess) {
+            prefs.edit().putLong("last_sync_time", System.currentTimeMillis()).apply()
+            Result.success()
+        } else {
+            Result.success()
+        }
+    }
+}
