@@ -22,7 +22,7 @@ class NetworkManager {
 
     /**
      * 1. ส่งข้อมูลกิจกรรมการออกกำลังกาย (Garmin Workout -> GAS)
-     * และรับรายการอาหารล่าสุดกลับมาด้วย (2-Way Sync Ingest)
+     * และรับรายการอาหาร + น้ำหนักล่าสุดกลับมาด้วย (3-Way Sync Ingest)
      */
     suspend fun syncWorkouts(
         endpointUrl: String,
@@ -42,7 +42,7 @@ class NetworkManager {
                 .post(requestBody)
                 .addHeader("Content-Type", "application/json")
                 .addHeader("X-Bridge-Token", secretToken.trim())
-                .addHeader("User-Agent", "GarminSyncCompanion/1.1")
+                .addHeader("User-Agent", "GarminSyncCompanion/1.2")
                 .build()
 
             val response = client.newCall(request).execute()
@@ -65,6 +65,7 @@ class NetworkManager {
                         inserted = payload.activities.size,
                         skipped = 0,
                         recentFoods = null,
+                        recentBodyMetrics = null,
                         error = null
                     )
                 )
@@ -81,7 +82,7 @@ class NetworkManager {
         endpointUrl: String,
         secretToken: String,
         days: Int = 3
-    ): Result<List<FoodItem>> = withContext(Dispatchers.IO) {
+    ): Result<Pair<List<FoodItem>, List<BodyMetricItem>?>> = withContext(Dispatchers.IO) {
         try {
             if (endpointUrl.isBlank()) {
                 return@withContext Result.failure(IllegalArgumentException("ยังไม่ได้ระบุ GAS Web App URL"))
@@ -94,7 +95,7 @@ class NetworkManager {
                 .url(url)
                 .get()
                 .addHeader("X-Bridge-Token", secretToken.trim())
-                .addHeader("User-Agent", "GarminSyncCompanion/1.1")
+                .addHeader("User-Agent", "GarminSyncCompanion/1.2")
                 .build()
 
             val response = client.newCall(request).execute()
@@ -106,9 +107,50 @@ class NetworkManager {
 
             val foodResp = gson.fromJson(responseText, FoodLogsResponse::class.java)
             if (foodResp != null && foodResp.success) {
-                Result.success(foodResp.foods ?: emptyList())
+                Result.success(Pair(foodResp.foods ?: emptyList(), foodResp.bodyMetrics))
             } else {
                 Result.failure(Exception(foodResp?.error ?: "ไม่สามารถดึงข้อมูลอาหารจากเซิร์ฟเวอร์ได้"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 3. ดึงข้อมูลน้ำหนักและ %ไขมัน (Xiaomi S400) จากชีต
+     */
+    suspend fun fetchRecentBodyMetrics(
+        endpointUrl: String,
+        secretToken: String,
+        days: Int = 7
+    ): Result<List<BodyMetricItem>> = withContext(Dispatchers.IO) {
+        try {
+            if (endpointUrl.isBlank()) {
+                return@withContext Result.failure(IllegalArgumentException("ยังไม่ได้ระบุ GAS Web App URL"))
+            }
+
+            val separator = if (endpointUrl.contains("?")) "&" else "?"
+            val url = "$endpointUrl${separator}action=get_body_metrics&days=$days&token=${secretToken.trim()}"
+
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .addHeader("X-Bridge-Token", secretToken.trim())
+                .addHeader("User-Agent", "GarminSyncCompanion/1.2")
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseText = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(Exception("HTTP ${response.code}: $responseText"))
+            }
+
+            val metricResp = gson.fromJson(responseText, BodyMetricsResponse::class.java)
+            if (metricResp != null && metricResp.success) {
+                Result.success(metricResp.bodyMetrics ?: emptyList())
+            } else {
+                Result.failure(Exception(metricResp?.error ?: "ไม่สามารถดึงข้อมูลน้ำหนักจากเซิร์ฟเวอร์ได้"))
             }
         } catch (e: Exception) {
             Result.failure(e)

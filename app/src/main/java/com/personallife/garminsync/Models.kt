@@ -3,7 +3,7 @@ package com.personallife.garminsync
 import com.google.gson.annotations.SerializedName
 
 data class WorkoutSyncPayload(
-    @SerializedName("clientVersion") val clientVersion: String = "1.1.0",
+    @SerializedName("clientVersion") val clientVersion: String = "1.2.0",
     @SerializedName("source") val source: String = "GARMIN_HEALTH_CONNECT",
     @SerializedName("activities") val activities: List<WorkoutItem>
 )
@@ -42,6 +42,24 @@ data class FoodLogsResponse(
     @SerializedName("count") val count: Int? = 0,
     @SerializedName("days") val days: Int? = 0,
     @SerializedName("foods") val foods: List<FoodItem>? = null,
+    @SerializedName("bodyMetrics") val bodyMetrics: List<BodyMetricItem>? = null,
+    @SerializedName("error") val error: String? = null
+)
+
+data class BodyMetricItem(
+    @SerializedName("metricId") val metricId: String,
+    @SerializedName("date") val date: String,             // YYYY-MM-DD
+    @SerializedName("weightKg") val weightKg: Double,
+    @SerializedName("bodyFatPct") val bodyFatPct: Double = 0.0,
+    @SerializedName("muscleKg") val muscleKg: Double = 0.0,
+    @SerializedName("bmrKcal") val bmrKcal: Double = 0.0,
+    @SerializedName("createdAt") val createdAt: String? = null
+)
+
+data class BodyMetricsResponse(
+    @SerializedName("success") val success: Boolean,
+    @SerializedName("count") val count: Int? = 0,
+    @SerializedName("bodyMetrics") val bodyMetrics: List<BodyMetricItem>? = null,
     @SerializedName("error") val error: String? = null
 )
 
@@ -51,5 +69,6 @@ data class BridgeResponse(
     @SerializedName("inserted") val inserted: Int?,
     @SerializedName("skipped") val skipped: Int?,
     @SerializedName("recentFoods") val recentFoods: List<FoodItem>? = null,
+    @SerializedName("recentBodyMetrics") val recentBodyMetrics: List<BodyMetricItem>? = null,
     @SerializedName("error") val error: String? = null
 )

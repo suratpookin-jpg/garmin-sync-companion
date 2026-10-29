@@ -4,17 +4,20 @@ import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.BodyFatRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.MealType
 import androidx.health.connect.client.records.NutritionRecord
+import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.health.connect.client.units.Energy
 import androidx.health.connect.client.units.Mass
+import androidx.health.connect.client.units.Percentage
 import androidx.health.connect.client.units.grams
 import androidx.health.connect.client.units.kilocalories
 import java.time.Duration
@@ -39,7 +42,11 @@ class HealthConnectManager(private val context: Context) {
         HealthPermission.getReadPermission(DistanceRecord::class),
         HealthPermission.getReadPermission(HeartRateRecord::class),
         HealthPermission.getReadPermission(NutritionRecord::class),
-        HealthPermission.getWritePermission(NutritionRecord::class)
+        HealthPermission.getWritePermission(NutritionRecord::class),
+        HealthPermission.getReadPermission(WeightRecord::class),
+        HealthPermission.getWritePermission(WeightRecord::class),
+        HealthPermission.getReadPermission(BodyFatRecord::class),
+        HealthPermission.getWritePermission(BodyFatRecord::class)
     )
 
     suspend fun hasAllPermissions(): Boolean {
@@ -53,13 +60,10 @@ class HealthConnectManager(private val context: Context) {
 
     /**
      * เขียนข้อมูลอาหาร (NutritionRecord) ลง Health Connect
-     * เพื่อให้ Samsung Health ดึงไปแสดงในการ์ดอาหารอัตโนมัติ
-     * พร้อมระบบตรวจสอบและป้องกันข้อมูลซ้ำ (Idempotency) ผ่าน clientRecordId
      */
     suspend fun writeNutritionRecords(foods: List<FoodItem>): Pair<Int, Int> {
         if (foods.isEmpty()) return Pair(0, 0)
 
-        // 1. ตรวจสอบรายการ NutritionRecords ที่มีอยู่ใน Health Connect ย้อนหลัง 7 วันเพื่อกันซ้ำ
         val now = Instant.now()
         val sevenDaysAgo = now.minus(7, ChronoUnit.DAYS)
         val existingClientIds = mutableSetOf<String>()
@@ -91,7 +95,6 @@ class HealthConnectManager(private val context: Context) {
                 "FOOD_${food.date}_${(food.description ?: "").hashCode()}"
             }
 
-            // ถ้ามีอยู่แล้วใน Health Connect ให้ข้าม
             if (existingClientIds.contains(uniqueId)) {
                 skipped++
                 continue
@@ -132,6 +135,82 @@ class HealthConnectManager(private val context: Context) {
         }
     }
 
+    /**
+     * เขียนข้อมูลน้ำหนักและ %ไขมัน (Xiaomi S400) ลง Health Connect
+     * เพื่อให้ Samsung Health ดึงไปแสดงในการ์ดน้ำหนัก & องค์ประกอบร่างกาย
+     */
+    suspend fun writeBodyMetricRecords(metrics: List<BodyMetricItem>): Pair<Int, Int> {
+        if (metrics.isEmpty()) return Pair(0, 0)
+
+        val now = Instant.now()
+        val thirtyDaysAgo = now.minus(30, ChronoUnit.DAYS)
+        val existingClientIds = mutableSetOf<String>()
+
+        try {
+            val existing = client.readRecords(
+                ReadRecordsRequest(
+                    recordType = WeightRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(thirtyDaysAgo, now.plus(1, ChronoUnit.DAYS))
+                )
+            )
+            for (rec in existing.records) {
+                val cid = rec.metadata.clientRecordId
+                if (!cid.isNullOrBlank()) {
+                    existingClientIds.add(cid)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        val recordsToInsert = mutableListOf<androidx.health.connect.client.records.Record>()
+        var skipped = 0
+
+        for (item in metrics) {
+            if (item.weightKg <= 0.0) continue
+
+            val weightClientId = "WEIGHT_${item.metricId}"
+            if (existingClientIds.contains(weightClientId)) {
+                skipped++
+                continue
+            }
+
+            val instant = parseMetricTimestamp(item)
+
+            val weightRec = WeightRecord(
+                weight = Mass.kilograms(item.weightKg),
+                time = instant,
+                zoneOffset = ZoneOffset.ofHours(7),
+                metadata = Metadata(clientRecordId = weightClientId)
+            )
+            recordsToInsert.add(weightRec)
+            existingClientIds.add(weightClientId)
+
+            if (item.bodyFatPct > 0.0 && item.bodyFatPct <= 100.0) {
+                val fatClientId = "BODYFAT_${item.metricId}"
+                val fatRec = BodyFatRecord(
+                    percentage = Percentage(item.bodyFatPct),
+                    time = instant,
+                    zoneOffset = ZoneOffset.ofHours(7),
+                    metadata = Metadata(clientRecordId = fatClientId)
+                )
+                recordsToInsert.add(fatRec)
+            }
+        }
+
+        if (recordsToInsert.isEmpty()) {
+            return Pair(0, skipped)
+        }
+
+        return try {
+            client.insertRecords(recordsToInsert)
+            Pair(recordsToInsert.size, skipped)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Pair(0, skipped)
+        }
+    }
+
     private fun parseFoodTimestamp(food: FoodItem): Instant {
         val zoneBangkok = ZoneId.of("Asia/Bangkok")
         if (!food.createdAt.isNullOrBlank()) {
@@ -140,9 +219,7 @@ class HealthConnectManager(private val context: Context) {
             } catch (e: Exception) {
                 try {
                     return ZonedDateTime.parse(food.createdAt).toInstant()
-                } catch (e2: Exception) {
-                    // Ignored
-                }
+                } catch (e2: Exception) {}
             }
         }
 
@@ -156,6 +233,26 @@ class HealthConnectManager(private val context: Context) {
                 else -> Pair(12, 0)
             }
             localDate.atTime(hour, min).atZone(zoneBangkok).toInstant()
+        } catch (e: Exception) {
+            Instant.now()
+        }
+    }
+
+    private fun parseMetricTimestamp(item: BodyMetricItem): Instant {
+        val zoneBangkok = ZoneId.of("Asia/Bangkok")
+        if (!item.createdAt.isNullOrBlank()) {
+            try {
+                return Instant.parse(item.createdAt)
+            } catch (e: Exception) {
+                try {
+                    return ZonedDateTime.parse(item.createdAt).toInstant()
+                } catch (e2: Exception) {}
+            }
+        }
+
+        return try {
+            val localDate = LocalDate.parse(item.date)
+            localDate.atTime(7, 30).atZone(zoneBangkok).toInstant()
         } catch (e: Exception) {
             Instant.now()
         }
@@ -181,7 +278,6 @@ class HealthConnectManager(private val context: Context) {
         val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.US).withZone(zoneBangkok)
 
         try {
-            // 1. อ่าน ExerciseSessionRecord ทั้งหมดในช่วงเวลา
             val sessionResponse = client.readRecords(
                 ReadRecordsRequest(
                     recordType = ExerciseSessionRecord::class,
@@ -200,7 +296,6 @@ class HealthConnectManager(private val context: Context) {
 
                 if (durationMinutes <= 0.0) continue
 
-                // 2. Aggregate Active Calories
                 var activeCalories = 0.0
                 try {
                     val calAgg = client.aggregate(
@@ -210,11 +305,8 @@ class HealthConnectManager(private val context: Context) {
                         )
                     )
                     activeCalories = calAgg[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories ?: 0.0
-                } catch (e: Exception) {
-                    // Ignored
-                }
+                } catch (e: Exception) {}
 
-                // 3. Aggregate Distance
                 var distanceKm: Double? = null
                 try {
                     val distAgg = client.aggregate(
@@ -227,11 +319,8 @@ class HealthConnectManager(private val context: Context) {
                     if (meters != null && meters > 0) {
                         distanceKm = Math.round((meters / 1000.0) * 100.0) / 100.0
                     }
-                } catch (e: Exception) {
-                    // Ignored
-                }
+                } catch (e: Exception) {}
 
-                // 4. อ่านค่าเฉลี่ย HeartRate
                 var avgHeartRate: Int? = null
                 try {
                     val hrResponse = client.readRecords(
@@ -244,11 +333,8 @@ class HealthConnectManager(private val context: Context) {
                     if (samples.isNotEmpty()) {
                         avgHeartRate = samples.map { it.beatsPerMinute }.average().toInt()
                     }
-                } catch (e: Exception) {
-                    // Ignored
-                }
+                } catch (e: Exception) {}
 
-                // 5. คำนวณ Pace
                 var avgPace: String? = null
                 if (distanceKm != null && distanceKm > 0.05 && durationMinutes > 0) {
                     val totalPaceSeconds = ((durationMinutes * 60) / distanceKm).toInt()
@@ -263,7 +349,6 @@ class HealthConnectManager(private val context: Context) {
                 val title = session.title ?: if (isGarmin) "Garmin Workout" else "Workout"
                 val rawType = getExerciseTypeName(session.exerciseType)
 
-                // Composite Key ป้องกันซ้ำ
                 val compositeKey = "HC_GARMIN_${sessionStart.epochSecond}_${rawType}"
                 val externalId = session.metadata.id
 
