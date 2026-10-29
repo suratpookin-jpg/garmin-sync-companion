@@ -210,7 +210,8 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (!metricsToSync.isNullOrEmpty()) {
-                    appendLog("📥 ได้รับค่าน้ำหนัก ${metricsToSync.size} รายการ กำลังเขียนลง Health Connect...")
+                    val sample = metricsToSync.lastOrNull()
+                    appendLog("📥 ได้รับ ${metricsToSync.size} รายการ (ค่าล่าสุด: หนัก ${sample?.weightKg} kg, ไขมัน ${sample?.bodyFatPct}%)")
                     val (inserted, skipped) = hcManager.writeBodyMetricRecords(metricsToSync)
                     appendLog("✅ บันทึกน้ำหนัก & %ไขมันลง Health Connect สำเร็จ: +$inserted รายการใหม่ (ข้ามที่ซ้ำ: $skipped)")
                     appendLog("✨ Samsung Health จะแสดงค่าน้ำหนักและองค์ประกอบร่างกายให้อัตโนมัติ")
