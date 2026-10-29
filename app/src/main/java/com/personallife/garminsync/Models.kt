@@ -52,6 +52,7 @@ data class BodyMetricItem(
     @SerializedName("weightKg") val weightKg: Double,
     @SerializedName("bodyFatPct") val bodyFatPct: Double = 0.0,
     @SerializedName("muscleKg") val muscleKg: Double = 0.0,
+    @SerializedName("boneMassKg") val boneMassKg: Double = 0.0,
     @SerializedName("bmrKcal") val bmrKcal: Double = 0.0,
     @SerializedName("createdAt") val createdAt: String? = null
 )

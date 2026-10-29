@@ -4,10 +4,13 @@ import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.BasalMetabolicRateRecord
 import androidx.health.connect.client.records.BodyFatRecord
+import androidx.health.connect.client.records.BoneMassRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.LeanBodyMassRecord
 import androidx.health.connect.client.records.MealType
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.WeightRecord
@@ -18,6 +21,7 @@ import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.health.connect.client.units.Energy
 import androidx.health.connect.client.units.Mass
 import androidx.health.connect.client.units.Percentage
+import androidx.health.connect.client.units.Power
 import androidx.health.connect.client.units.grams
 import androidx.health.connect.client.units.kilocalories
 import java.time.Duration
@@ -46,7 +50,13 @@ class HealthConnectManager(private val context: Context) {
         HealthPermission.getReadPermission(WeightRecord::class),
         HealthPermission.getWritePermission(WeightRecord::class),
         HealthPermission.getReadPermission(BodyFatRecord::class),
-        HealthPermission.getWritePermission(BodyFatRecord::class)
+        HealthPermission.getWritePermission(BodyFatRecord::class),
+        HealthPermission.getReadPermission(LeanBodyMassRecord::class),
+        HealthPermission.getWritePermission(LeanBodyMassRecord::class),
+        HealthPermission.getReadPermission(BoneMassRecord::class),
+        HealthPermission.getWritePermission(BoneMassRecord::class),
+        HealthPermission.getReadPermission(BasalMetabolicRateRecord::class),
+        HealthPermission.getWritePermission(BasalMetabolicRateRecord::class)
     )
 
     suspend fun hasAllPermissions(): Boolean {
@@ -136,8 +146,8 @@ class HealthConnectManager(private val context: Context) {
     }
 
     /**
-     * เขียนข้อมูลน้ำหนักและ %ไขมัน (Xiaomi S400) ลง Health Connect
-     * เพื่อให้ Samsung Health ดึงไปแสดงในการ์ดน้ำหนัก & องค์ประกอบร่างกาย
+     * เขียนข้อมูลองค์ประกอบร่างกายเต็มรูปแบบ (Xiaomi S400) ลง Health Connect
+     * รองรับทั้ง Weight, Body Fat %, Muscle Mass, Bone Mass และ BMR
      */
     suspend fun writeBodyMetricRecords(metrics: List<BodyMetricItem>): Pair<Int, Int> {
         if (metrics.isEmpty()) return Pair(0, 0)
@@ -177,6 +187,7 @@ class HealthConnectManager(private val context: Context) {
 
             val instant = parseMetricTimestamp(item)
 
+            // 1. WeightRecord (น้ำหนักตัว)
             val weightRec = WeightRecord(
                 weight = Mass.kilograms(item.weightKg),
                 time = instant,
@@ -186,15 +197,48 @@ class HealthConnectManager(private val context: Context) {
             recordsToInsert.add(weightRec)
             existingClientIds.add(weightClientId)
 
+            // 2. BodyFatRecord (เปอร์เซ็นต์ไขมันในร่างกาย)
             if (item.bodyFatPct > 0.0 && item.bodyFatPct <= 100.0) {
-                val fatClientId = "BODYFAT_${item.metricId}"
                 val fatRec = BodyFatRecord(
                     percentage = Percentage(item.bodyFatPct),
                     time = instant,
                     zoneOffset = ZoneOffset.ofHours(7),
-                    metadata = Metadata(clientRecordId = fatClientId)
+                    metadata = Metadata(clientRecordId = "BODYFAT_${item.metricId}")
                 )
                 recordsToInsert.add(fatRec)
+            }
+
+            // 3. LeanBodyMassRecord (มวลกล้ามเนื้อโครงร่าง)
+            if (item.muscleKg > 0.0) {
+                val leanRec = LeanBodyMassRecord(
+                    mass = Mass.kilograms(item.muscleKg),
+                    time = instant,
+                    zoneOffset = ZoneOffset.ofHours(7),
+                    metadata = Metadata(clientRecordId = "LEANMASS_${item.metricId}")
+                )
+                recordsToInsert.add(leanRec)
+            }
+
+            // 4. BoneMassRecord (มวลกระดูก)
+            if (item.boneMassKg > 0.0) {
+                val boneRec = BoneMassRecord(
+                    mass = Mass.kilograms(item.boneMassKg),
+                    time = instant,
+                    zoneOffset = ZoneOffset.ofHours(7),
+                    metadata = Metadata(clientRecordId = "BONEMASS_${item.metricId}")
+                )
+                recordsToInsert.add(boneRec)
+            }
+
+            // 5. BasalMetabolicRateRecord (อัตราเผาผลาญพลังงานพื้นฐาน BMR)
+            if (item.bmrKcal > 0.0) {
+                val bmrRec = BasalMetabolicRateRecord(
+                    basalMetabolicRate = Power.kilocaloriesPerDay(item.bmrKcal),
+                    time = instant,
+                    zoneOffset = ZoneOffset.ofHours(7),
+                    metadata = Metadata(clientRecordId = "BMR_${item.metricId}")
+                )
+                recordsToInsert.add(bmrRec)
             }
         }
 
